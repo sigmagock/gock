@@ -1,0 +1,19 @@
+# Deploy on Render (Free Web Service)
+services:
+- type: web
+name: pulsechain-369-terminal
+env: node
+plan: free
+region: oregon # pick closest
+buildCommand: npm install && npm run build
+startCommand: node dist/server.js
+autoDeploy: true
+envVars:
+- key: PORT
+value: 3000
+- key: HOST
+value: 0.0.0.0
+- key: PLS_RPC
+value: https://rpc.pulsechain.com
+# Optional: add API_TOKEN etc in the Render dashboard or here
+healthCheckPath: /openapi.json

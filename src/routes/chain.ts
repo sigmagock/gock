@@ -52,21 +52,31 @@ export function buildChainRouter(): Router {
     }
   });
 
-  r.get('/chain/block', async (req, res) => {
-    try {
-      const num = req.query.number as string | undefined;
-      const hash = req.query.hash as string | undefined;
-      const includeTxs = String(req.query.includeTxs || 'false') === 'true';
-      if (!num && !hash) return res.status(400).json({ error: 'Provide number or hash' });
+r.get('/chain/block', async (req, res) => {
+  try {
+    const num = req.query.number as string | undefined;
+    const hash = req.query.hash as string | undefined;
+    const includeTxs = String(req.query.includeTxs || 'false') === 'true';
+    if (!num && !hash) return res.status(400).json({ error: 'Provide number or hash' });
 
-      const block = hash
-        ? await provider.getBlock(hash, includeTxs)
-        : await provider.getBlock(isHexString(num!) ? BigInt(num!) : BigInt(num!), includeTxs);
-      res.json(block);
-    } catch (e: any) {
-      res.status(500).json({ error: e?.message || 'failed' });
+    const getBlock = includeTxs
+      ? provider.getBlockWithTransactions.bind(provider)
+      : provider.getBlock.bind(provider);
+
+    let block;
+    if (hash) {
+      block = await getBlock(hash);
+    } else {
+      // support 0x-hex or decimal number
+      const n = isHexString(num!) ? BigInt(num!) : BigInt(num!);
+      block = await getBlock(n);
     }
-  });
+
+    res.json(block);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'failed' });
+  }
+});
 
   r.get('/chain/tx/:hash', async (req, res) => {
     try {

@@ -46,27 +46,40 @@ export function buildChainRouter(): Router {
   });
 
   // v6: pick the right method; there is NO boolean arg
-  r.get('/chain/block', async (req, res) => {
-    try {
-      const num = req.query.number as string | undefined;
-      const hash = req.query.hash as string | undefined;
-      const includeTxs = String(req.query.includeTxs || 'false') === 'true';
-      if (!num && !hash) return res.status(400).json({ error: 'Provide number or hash' });
+// v6-safe: use raw RPC for includeTxs; single-arg getBlock otherwise
+r.get('/chain/block', async (req, res) => {
+  try {
+    const num = req.query.number as string | undefined;
+    const hash = req.query.hash as string | undefined;
+    const includeTxs = String(req.query.includeTxs || 'false') === 'true';
+    if (!num && !hash) return res.status(400).json({ error: 'Provide number or hash' });
 
-      const getBlock = includeTxs
-        ? provider.getBlockWithTransactions.bind(provider)
-        : provider.getBlock.bind(provider);
-
+    if (includeTxs) {
+      // Full transactions: call raw RPC
+      if (hash) {
+        const block = await provider.send('eth_getBlockByHash', [hash, true]);
+        return res.json(block);
+      } else {
+        const n = isHexString(num!) ? num! : ('0x' + BigInt(num!).toString(16));
+        const block = await provider.send('eth_getBlockByNumber', [n, true]);
+        return res.json(block);
+      }
+    } else {
+      // Header + tx hashes only: standard v6 getBlock (single arg)
       let block: any;
       if (hash) {
-        block = await getBlock(hash);                   // by hash
+        block = await provider.getBlock(hash);
       } else {
         const n = isHexString(num!) ? BigInt(num!) : BigInt(num!);
-        block = await getBlock(n);                      // by number (hex or decimal)
+        block = await provider.getBlock(n);
       }
-      res.json(block);
-    } catch (e: any) { res.status(500).json({ error: e?.message || 'failed' }); }
-  });
+      return res.json(block);
+    }
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'failed' });
+  }
+});
+
 
   r.get('/chain/tx/:hash', async (req, res) => {
     try {

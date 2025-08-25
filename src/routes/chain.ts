@@ -129,8 +129,13 @@ r.get('/chain/block', async (req, res) => {
       const { to, data, blockTag } = req.body as { to: string; data: string; blockTag?: string };
       if (!/^0x[a-fA-F0-9]{40}$/.test(to)) return res.status(400).json({ error: 'Invalid `to` address' });
       if (!isHexString(data)) return res.status(400).json({ error: 'Invalid calldata' });
-      const ret = await provider.call({ to, data }, parseBlockTag(blockTag));
-      res.json({ data: ret });
+const ret = await provider.call({
+  to,
+  data,
+  // v6: include blockTag in the request object (no 2nd arg)
+  blockTag: parseBlockTag(blockTag),
+});
+res.json({ data: ret });
     } catch (e: any) { res.status(500).json({ error: e?.message || 'failed' }); }
   });
 

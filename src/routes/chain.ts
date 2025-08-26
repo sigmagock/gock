@@ -240,12 +240,13 @@ res.json({ result: result.toString() });
     }
   });
 
-// ================= AtropaMath generate (canonical + shadow forks) =================
+// ─────────────────────────── AtropaMath generate (signed + gas-estimated + shadows)
 r.post('/chain/atropamath/generate', async (req, res) => {
   try {
     const { address } = req.body as { address: string };
-    if (!/^0x[a-fA-F0-9]{40}$/.test(address))
+    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
       return res.status(400).json({ error: 'Invalid contract address' });
+    }
 
     const wallet = getWallet();
     const c = new Contract(
@@ -257,18 +258,15 @@ r.post('/chain/atropamath/generate', async (req, res) => {
       wallet
     );
 
-    // get typed function handle
     const fn = c.getFunction("Generate");
 
-    // estimate gas and send
     const gasEstimate = await fn.estimateGas();
     const gasLimit = (gasEstimate * 120n) / 100n;
-    const tx = await fn.send({ gasLimit });
 
-    // wait for inclusion
+    const tx = await fn.send({ gasLimit });
     const receipt = await tx.wait();
 
-    // ───────────────────────────── canonical logs
+    // ─── Canonical logs
     let canonical: { event: string, value: string } | null = null;
     for (const log of receipt.logs) {
       try {
@@ -280,25 +278,27 @@ r.post('/chain/atropamath/generate', async (req, res) => {
           };
           break;
         }
-      } catch { /* skip non-matching logs */ }
+      } catch {
+        // skip unrelated logs
+      }
     }
 
-    // ───────────────────────────── shadow forks
-    const providerC = c.connect(provider); // read-only
+    // ─── Shadows
+    const providerC = c.connect(provider);
 
-    // shadow #1: static eth_call at current block
+    // shadow 1: static eth_call
     const shadowCall = await providerC.Generate.staticCall()
       .then(v => v.toString())
       .catch(() => null);
 
-    // shadow #2: replay logs using provider trace (if node supports it)
+    // shadow 2: debug trace (optional)
     let shadowTrace: string | null = null;
     try {
       const trace = await provider.send("debug_traceTransaction", [tx.hash, {}]);
       const out = trace?.structLogs?.find((x: any) => x.op === "RETURN");
       shadowTrace = out ? out.stack?.[0] : null;
     } catch {
-      // not all RPCs expose debug_traceTransaction
+      // some nodes don’t support debug_traceTransaction
     }
 
     res.json({

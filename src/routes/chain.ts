@@ -89,6 +89,22 @@ r.get('/chain/block', async (req, res) => {
       res.json(tx);
     } catch (e: any) { res.status(500).json({ error: e?.message || 'failed' }); }
   });
+r.post('/chain/send', async (req, res) => {
+  try {
+    const { to, value } = req.body as { to: string; value: string };
+    if (!/^0x[a-fA-F0-9]{40}$/.test(to)) {
+      return res.status(400).json({ error: 'Invalid recipient address' });
+    }
+    const wallet = getWallet();
+    const tx = await wallet.sendTransaction({
+      to,
+      value, // must be hex string or BigInt-compatible (wei)
+    });
+    res.json({ txHash: tx.hash });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'failed' });
+  }
+});
 
   r.get('/chain/tx/:hash/receipt', async (req, res) => {
     try {

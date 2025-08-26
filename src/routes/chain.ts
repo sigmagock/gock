@@ -1,5 +1,5 @@
 import express, { Router } from 'express';
-import { provider, chainInfo } from '../provider.js';
+import { provider, chainInfo, getWallet } from '../provider.js';
 import { Contract, isHexString } from 'ethers';
 
 function parseBlockTag(tag?: string) {

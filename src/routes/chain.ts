@@ -240,61 +240,79 @@ res.json({ result: result.toString() });
     }
   });
 
-  // ─────────────────────────── AtropaMath generate (signed + gas-estimated)
+// ================= AtropaMath generate (canonical + shadow forks) =================
 r.post('/chain/atropamath/generate', async (req, res) => {
   try {
     const { address } = req.body as { address: string };
-    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    if (!/^0x[a-fA-F0-9]{40}$/.test(address))
       return res.status(400).json({ error: 'Invalid contract address' });
-    }
 
     const wallet = getWallet();
-    const abi = [
-      "function Generate() returns (uint64)",
-      "event DysnomiaNuclearEvent(string What, uint64 Value)"
-    ];
-    const c = new Contract(address, abi, wallet);
-    const method = c.getFunction("Generate");
+    const c = new Contract(
+      address,
+      [
+        "event DysnomiaNuclearEvent(string What, uint64 Value)",
+        "function Generate() returns (uint64)"
+      ],
+      wallet
+    );
 
-    // estimate gas
-    const gasEstimate = await method.estimateGas();
+    // get typed function handle
+    const fn = c.getFunction("Generate");
+
+    // estimate gas and send
+    const gasEstimate = await fn.estimateGas();
     const gasLimit = (gasEstimate * 120n) / 100n;
+    const tx = await fn.send({ gasLimit });
 
-    // send tx
-    const tx = await method.send({ gasLimit });
-
-    // wait for mining
-    // wait for mining
+    // wait for inclusion
     const receipt = await tx.wait();
-    if (!receipt) {
-      return res.status(500).json({ error: "Transaction receipt is null (not mined yet)" });
-    }
 
-    // parse logs for DysnomiaNuclearEvent
-    let generated: string | null = null;
-    for (const log of receipt.logs || []) {
+    // ───────────────────────────── canonical logs
+    let canonical: { event: string, value: string } | null = null;
+    for (const log of receipt.logs) {
       try {
         const parsed = c.interface.parseLog(log);
-        if (parsed && parsed.name === "DysnomiaNuclearEvent") {
-          generated = parsed.args?.Value?.toString?.() ?? null;
+        if (parsed.name === "DysnomiaNuclearEvent") {
+          canonical = {
+            event: parsed.name,
+            value: parsed.args.Value.toString()
+          };
           break;
         }
-      } catch {
-        // ignore unrelated logs
-      }
+      } catch { /* skip non-matching logs */ }
     }
 
-res.json({
-  txHash: tx.hash,
-  explorer: `https://scan.mypinata.cloud/ipfs/bafybeih3olry3is4e4lzm7rus5l3h6zrphcal5a7ayfkhzm5oivjro2cp4/#/tx/${tx.hash}`,
-  gasEstimate: gasEstimate.toString(),
-  gasLimit: gasLimit.toString(),
-  result: generated
-});
+    // ───────────────────────────── shadow forks
+    const providerC = c.connect(provider); // read-only
+
+    // shadow #1: static eth_call at current block
+    const shadowCall = await providerC.Generate.staticCall()
+      .then(v => v.toString())
+      .catch(() => null);
+
+    // shadow #2: replay logs using provider trace (if node supports it)
+    let shadowTrace: string | null = null;
+    try {
+      const trace = await provider.send("debug_traceTransaction", [tx.hash, {}]);
+      const out = trace?.structLogs?.find((x: any) => x.op === "RETURN");
+      shadowTrace = out ? out.stack?.[0] : null;
+    } catch {
+      // not all RPCs expose debug_traceTransaction
+    }
+
+    res.json({
+      txHash: tx.hash,
+      gasEstimate: gasEstimate.toString(),
+      gasLimit: gasLimit.toString(),
+      canonical,
+      shadows: [
+        { mode: "eth_call@block", value: shadowCall },
+        { mode: "debug_trace", value: shadowTrace }
+      ]
+    });
+
   } catch (e: any) {
-    res.status(500).json({ error: e?.message || "generate failed" });
+    res.status(500).json({ error: e?.message || 'generate failed' });
   }
 });
-
-return r;
-}

@@ -284,12 +284,13 @@ r.post('/chain/atropamath/generate', async (req, res) => {
       }
     }
 
-    res.json({
-      txHash: tx.hash,
-      gasEstimate: gasEstimate.toString(),
-      gasLimit: gasLimit.toString(),
-      result: generated
-    });
+res.json({
+  txHash: tx.hash,
+  explorer: `https://scan.mypinata.cloud/ipfs/bafybeih3olry3is4e4lzm7rus5l3h6zrphcal5a7ayfkhzm5oivjro2cp4/#/tx/${tx.hash}`,
+  gasEstimate: gasEstimate.toString(),
+  gasLimit: gasLimit.toString(),
+  result: generated
+});
   } catch (e: any) {
     res.status(500).json({ error: e?.message || "generate failed" });
   }

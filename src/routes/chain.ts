@@ -264,6 +264,7 @@ r.post('/chain/atropamath/generate', async (req, res) => {
     const tx = await method.send({ gasLimit });
 
     // wait for mining
+    // wait for mining
     const receipt = await tx.wait();
     if (!receipt) {
       return res.status(500).json({ error: "Transaction receipt is null (not mined yet)" });
@@ -289,3 +290,10 @@ r.post('/chain/atropamath/generate', async (req, res) => {
       gasLimit: gasLimit.toString(),
       result: generated
     });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || "generate failed" });
+  }
+});
+
+return r;
+}

@@ -1,171 +1,72 @@
-import express, { Router } from 'express';
-import { provider, chainInfo, getWallet } from '../provider.js';
-import { Contract, isHexString } from 'ethers';
-
-function parseBlockTag(tag?: string) {
-  if (!tag) return 'latest' as const;
-  const allowed = ['latest', 'safe', 'finalized'];
-  return (allowed as string[]).includes(tag) ? (tag as any) : 'latest';
-}
-
-export function buildChainRouter(): Router {
-  const r = express.Router();
-
-  r.get('/chain/info', async (_req, res) => {
-    try { res.json(await chainInfo()); }
-    catch (e: any) { res.status(500).json({ error: e?.message || 'failed' }); }
-  });
-
-  r.get('/chain/balance/:address', async (req, res) => {
-    try {
-      const { address } = req.params as { address: string };
-      const blockTag = parseBlockTag(String(req.query.blockTag || ''));
-      if (!/^0x[a-fA-F0-9]{40}$/.test(address)) return res.status(400).json({ error: 'Invalid address' });
-      const wei = await provider.getBalance(address, blockTag);
-      res.json({ wei: '0x' + wei.toString(16) });
-    } catch (e: any) { res.status(500).json({ error: e?.message || 'failed' }); }
-  });
-
-  r.get('/chain/erc20-balance', async (req, res) => {
-    try {
-      const token  = String(req.query.token  || '');
-      const holder = String(req.query.holder || '');
-      if (!/^0x[a-fA-F0-9]{40}$/.test(token) || !/^0x[a-fA-F0-9]{40}$/.test(holder)) {
-        return res.status(400).json({ error: 'Invalid token or holder address' });
-      }
-      const erc20 = new Contract(token, [
-        'function decimals() view returns (uint8)',
-        'function symbol() view returns (string)',
-        'function balanceOf(address) view returns (uint256)',
-      ], provider);
-      const [decimals, symbol, balance] = await Promise.all([
-        erc20.decimals(), erc20.symbol(), erc20.balanceOf(holder),
-      ]);
-      res.json({ balance: balance.toString(), decimals: Number(decimals), symbol: String(symbol) });
-    } catch (e: any) { res.status(500).json({ error: e?.message || 'failed' }); }
-  });
-
-  // v6: pick the right method; there is NO boolean arg
-// v6-safe: use raw RPC for includeTxs; single-arg getBlock otherwise
-r.get('/chain/block', async (req, res) => {
-  try {
-    const num = req.query.number as string | undefined;
-    const hash = req.query.hash as string | undefined;
-    const includeTxs = String(req.query.includeTxs || 'false') === 'true';
-    if (!num && !hash) return res.status(400).json({ error: 'Provide number or hash' });
-
-    if (includeTxs) {
-      // Full transactions: call raw RPC
-      if (hash) {
-        const block = await provider.send('eth_getBlockByHash', [hash, true]);
-        return res.json(block);
-      } else {
-        const n = isHexString(num!) ? num! : ('0x' + BigInt(num!).toString(16));
-        const block = await provider.send('eth_getBlockByNumber', [n, true]);
-        return res.json(block);
-      }
-    } else {
-      // Header + tx hashes only: standard v6 getBlock (single arg)
-      let block: any;
-      if (hash) {
-        block = await provider.getBlock(hash);
-      } else {
-        const n = isHexString(num!) ? BigInt(num!) : BigInt(num!);
-        block = await provider.getBlock(n);
-      }
-      return res.json(block);
-    }
-  } catch (e: any) {
-    res.status(500).json({ error: e?.message || 'failed' });
-  }
+import type { Router } from 'express';
+const c = new Contract(address, [abiFragment], provider);
+const fn = (c as any)[functionName as string];
+if (typeof fn !== 'function') return res.status(400).json({ error: 'Function not found on contract' });
+const result = await fn.apply(c, Array.isArray(args) ? args : []);
+res.json({ result });
+} catch (e: any) { res.status(500).json({ error: e?.message || 'failed' }); }
 });
 
 
-  r.get('/chain/tx/:hash', async (req, res) => {
-    try {
-      const { hash } = req.params;
-      if (!/^0x[a-fA-F0-9]{64}$/.test(hash)) return res.status(400).json({ error: 'Invalid tx hash' });
-      const tx = await provider.getTransaction(hash);
-      res.json(tx);
-    } catch (e: any) { res.status(500).json({ error: e?.message || 'failed' }); }
-  });
+// ---- Native send (signed)
 r.post('/chain/send', async (req, res) => {
-  try {
-    const { to, value } = req.body as { to: string; value: string };
-    if (!/^0x[a-fA-F0-9]{40}$/.test(to)) {
-      return res.status(400).json({ error: 'Invalid recipient address' });
-    }
-    const wallet = getWallet();
-    const tx = await wallet.sendTransaction({
-      to,
-      value, // must be hex string or BigInt-compatible (wei)
-    });
-    res.json({ txHash: tx.hash });
-  } catch (e: any) {
-    res.status(500).json({ error: e?.message || 'failed' });
-  }
+try {
+const { to, value } = req.body as { to: string; value: string };
+if (!/^0x[a-fA-F0-9]{40}$/.test(to)) return res.status(400).json({ error: 'Invalid recipient address' });
+if (!/^0x[0-9a-fA-F]+$/.test(String(value))) return res.status(400).json({ error: 'value must be hex wei (e.g. 0xDE0B6B3A7640000)' });
+const wallet = getWallet();
+const tx = await wallet.sendTransaction({ to, value });
+res.json({ txHash: tx.hash });
+} catch (e: any) { res.status(500).json({ error: e?.message || 'send failed' }); }
 });
 
-  r.get('/chain/tx/:hash/receipt', async (req, res) => {
-    try {
-      const { hash } = req.params;
-      if (!/^0x[a-fA-F0-9]{64}$/.test(hash)) return res.status(400).json({ error: 'Invalid tx hash' });
-      const rcpt = await provider.getTransactionReceipt(hash);
-      res.json(rcpt);
-    } catch (e: any) { res.status(500).json({ error: e?.message || 'failed' }); }
-  });
 
-  r.get('/chain/logs', async (req, res) => {
-    try {
-      const fromBlock = (req.query.fromBlock as string) || undefined;
-      const toBlock   = (req.query.toBlock   as string) || undefined;
-      const addressCsv = (req.query.address as string) || '';
-      const topicsCsv  = (req.query.topics  as string) || '';
-
-      const addresses = addressCsv ? addressCsv.split(',').map(s => s.trim()) : undefined;
-      const topics = topicsCsv
-        ? topicsCsv.split(',').map(slot => slot.includes('|')
-            ? slot.split('|').map(t => (t === 'null' ? null : t))
-            : slot)
-        : undefined;
-
-      const filter: any = {};
-      if (fromBlock) filter.fromBlock = fromBlock;
-      if (toBlock)   filter.toBlock   = toBlock;
-      if (addresses && addresses.length) filter.address = addresses.length === 1 ? addresses[0] : addresses;
-      if (topics) filter.topics = topics as any;
-
-      const logs = await provider.getLogs(filter);
-      res.json(logs);
-    } catch (e: any) { res.status(500).json({ error: e?.message || 'failed' }); }
-  });
-
-  r.post('/chain/call', async (req, res) => {
-    try {
-      const { to, data, blockTag } = req.body as { to: string; data: string; blockTag?: string };
-      if (!/^0x[a-fA-F0-9]{40}$/.test(to)) return res.status(400).json({ error: 'Invalid `to` address' });
-      if (!isHexString(data)) return res.status(400).json({ error: 'Invalid calldata' });
-const ret = await provider.call({
-  to,
-  data,
-  // v6: include blockTag in the request object (no 2nd arg)
-  blockTag: parseBlockTag(blockTag),
+// ---- Generic contract write with gas estimation
+r.post('/chain/send-contract', async (req, res) => {
+try {
+const { address, abiFragment, functionName, args, value } = req.body as {
+address: string; abiFragment: string; functionName: string; args?: any[]; value?: string;
+};
+if (!/^0x[a-fA-F0-9]{40}$/.test(address)) return res.status(400).json({ error: 'Invalid contract address' });
+const wallet = getWallet();
+const c = new Contract(address, [abiFragment], wallet);
+const fn = (c as any)[functionName];
+if (typeof fn !== 'function') return res.status(400).json({ error: 'Function not found' });
+const txReq: any = { value: value ? BigInt(value) : undefined };
+const gasEstimate = await (c.estimateGas as any)[functionName](...(args || []), txReq);
+const gasLimit = (gasEstimate * 120n) / 100n;
+const tx = await fn(...(args || []), { ...txReq, gasLimit });
+res.json({ txHash: tx.hash, gasEstimate: gasEstimate.toString(), gasLimit: gasLimit.toString() });
+} catch (e: any) { res.status(500).json({ error: e?.message || 'contract send failed' }); }
 });
-res.json({ data: ret });
-    } catch (e: any) { res.status(500).json({ error: e?.message || 'failed' }); }
-  });
 
-  r.post('/chain/read-contract', async (req, res) => {
-    try {
-      const { address, abiFragment, functionName, args } = req.body as any;
-      if (!/^0x[a-fA-F0-9]{40}$/.test(address)) return res.status(400).json({ error: 'Invalid contract address' });
-      const c = new Contract(address, [abiFragment], provider);
-      const fn = (c as any)[functionName as string];
-      if (typeof fn !== 'function') return res.status(400).json({ error: 'Function not found on contract' });
-      const result = await fn.apply(c, Array.isArray(args) ? args : []);
-      res.json({ result });
-    } catch (e: any) { res.status(500).json({ error: e?.message || 'failed' }); }
-  });
 
-  return r;
+// ---- AtropaMath preview (eth_call)
+r.post('/chain/atropamath/preview', async (req, res) => {
+try {
+const { address } = req.body as { address: string };
+if (!/^0x[a-fA-F0-9]{40}$/.test(address)) return res.status(400).json({ error: 'Invalid contract address' });
+const c = new Contract(address, [ 'function Generate() returns (uint64)' ], provider);
+const result = await c.Generate();
+res.json({ result: result.toString() });
+} catch (e: any) { res.status(500).json({ error: e?.message || 'preview failed' }); }
+});
+
+
+// ---- AtropaMath generate (signed)
+r.post('/chain/atropamath/generate', async (req, res) => {
+try {
+const { address } = req.body as { address: string };
+if (!/^0x[a-fA-F0-9]{40}$/.test(address)) return res.status(400).json({ error: 'Invalid contract address' });
+const wallet = getWallet();
+const c = new Contract(address, [ 'function Generate() returns (uint64)' ], wallet);
+const gasEstimate = await c.estimateGas.Generate();
+const gasLimit = (gasEstimate * 120n) / 100n;
+const tx = await c.Generate({ gasLimit });
+res.json({ txHash: tx.hash, gasEstimate: gasEstimate.toString(), gasLimit: gasLimit.toString() });
+} catch (e: any) { res.status(500).json({ error: e?.message || 'generate failed' }); }
+});
+
+
+return r;
 }

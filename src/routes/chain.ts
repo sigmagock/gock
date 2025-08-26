@@ -241,31 +241,52 @@ res.json({ result: result.toString() });
   });
 
   // ─────────────────────────── AtropaMath generate (signed + gas-estimated)
-  r.post('/chain/atropamath/generate', async (req, res) => {
-    try {
-      const { address } = req.body as { address: string };
-      if (!/^0x[a-fA-F0-9]{40}$/.test(address)) return res.status(400).json({ error: 'Invalid contract address' });
-
-const wallet = getWallet();
-const c = new Contract(address, ['function Generate() returns (uint64)'], wallet);
-
-// v6-typed handle
-const method = c.getFunction('Generate');
-
-const gasEstimate = await method.estimateGas();
-const gasLimit = (gasEstimate * 120n) / 100n;
-
-const tx = await method.send({ gasLimit });   // state-changing
-res.json({
-  txHash: tx.hash,
-  gasEstimate: gasEstimate.toString(),
-  gasLimit: gasLimit.toString()
-});
-
-    } catch (e: any) {
-      res.status(500).json({ error: e?.message || 'generate failed' });
+r.post('/chain/atropamath/generate', async (req, res) => {
+  try {
+    const { address } = req.body as { address: string };
+    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+      return res.status(400).json({ error: 'Invalid contract address' });
     }
-  });
 
+    const wallet = getWallet();
+    const abi = [
+      "function Generate() returns (uint64)",
+      "event DysnomiaNuclearEvent(string What, uint64 Value)"
+    ];
+    const c = new Contract(address, abi, wallet);
+    const method = c.getFunction("Generate");
+
+    // estimate gas
+    const gasEstimate = await method.estimateGas();
+    const gasLimit = (gasEstimate * 120n) / 100n;
+
+    // send tx
+    const tx = await method.send({ gasLimit });
+
+    // wait for mining
+    const receipt = await tx.wait();
+
+    // parse logs for DysnomiaNuclearEvent
+    let generated: string | null = null;
+    for (const log of receipt.logs) {
+      try {
+        const parsed = c.interface.parseLog(log);
+        if (parsed.name === "DysnomiaNuclearEvent") {
+          generated = parsed.args.Value.toString();
+          break;
+        }
+      } catch { /* ignore other logs */ }
+    }
+
+    res.json({
+      txHash: tx.hash,
+      gasEstimate: gasEstimate.toString(),
+      gasLimit: gasLimit.toString(),
+      result: generated
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || "generate failed" });
+  }
+});
   return r;
 }

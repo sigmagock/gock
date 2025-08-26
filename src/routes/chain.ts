@@ -241,80 +241,54 @@ res.json({ result: result.toString() });
   });
 
 // ─────────────────────────── AtropaMath generate (signed + gas-estimated + shadows)
-r.post('/chain/atropamath/generate', async (req, res) => {
-  try {
-    const { address } = req.body as { address: string };
-    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
-      return res.status(400).json({ error: 'Invalid contract address' });
-    }
+  // ─────────────────────────── AtropaMath generate (signed + gas-estimated)
+  r.post('/chain/atropamath/generate', async (req, res) => {
+    try {
+      const { address } = req.body as { address: string };
+      if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+        return res.status(400).json({ error: 'Invalid contract address' });
+      }
 
-    const wallet = getWallet();
-    const c = new Contract(
-      address,
-      [
+      const wallet = getWallet();
+      const c = new Contract(address, [
         "event DysnomiaNuclearEvent(string What, uint64 Value)",
         "function Generate() returns (uint64)"
-      ],
-      wallet
-    );
+      ], wallet);
 
-    const fn = c.getFunction("Generate");
+      const fn = c.getFunction("Generate");
 
-    const gasEstimate = await fn.estimateGas();
-    const gasLimit = (gasEstimate * 120n) / 100n;
+      // Estimate gas
+      const gasEstimate = await fn.estimateGas();
+      const gasLimit = (gasEstimate * 120n) / 100n;
 
-    const tx = await fn.send({ gasLimit });
-    const receipt = await tx.wait();
+      // Send tx
+      const tx = await fn.send({ gasLimit });
+      const receipt = await tx.wait();
 
-    // ─── Canonical logs
-    let canonical: { event: string, value: string } | null = null;
-    for (const log of receipt.logs) {
-      try {
-        const parsed = c.interface.parseLog(log);
-        if (parsed.name === "DysnomiaNuclearEvent") {
-          canonical = {
-            event: parsed.name,
-            value: parsed.args.Value.toString()
-          };
-          break;
+      // Default result
+      let generated: string | null = null;
+
+      if (receipt && receipt.logs) {
+        for (const log of receipt.logs) {
+          try {
+            const parsed = c.interface.parseLog(log);
+            if (parsed && parsed.name === "DysnomiaNuclearEvent") {
+              generated = parsed.args?.Value?.toString() || null;
+              break;
+            }
+          } catch { /* ignore unrelated logs */ }
         }
-      } catch {
-        // skip unrelated logs
       }
+
+      res.json({
+        txHash: tx.hash,
+        gasEstimate: gasEstimate.toString(),
+        gasLimit: gasLimit.toString(),
+        result: generated
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "generate failed" });
     }
-
-    // ─── Shadows
-    const providerC = c.connect(provider);
-
-    // shadow 1: static eth_call
-    const shadowCall = await providerC.Generate.staticCall()
-      .then(v => v.toString())
-      .catch(() => null);
-
-    // shadow 2: debug trace (optional)
-    let shadowTrace: string | null = null;
-    try {
-      const trace = await provider.send("debug_traceTransaction", [tx.hash, {}]);
-      const out = trace?.structLogs?.find((x: any) => x.op === "RETURN");
-      shadowTrace = out ? out.stack?.[0] : null;
-    } catch {
-      // some nodes don’t support debug_traceTransaction
-    }
-
-    res.json({
-      txHash: tx.hash,
-      gasEstimate: gasEstimate.toString(),
-      gasLimit: gasLimit.toString(),
-      canonical,
-      shadows: [
-        { mode: "eth_call@block", value: shadowCall },
-        { mode: "debug_trace", value: shadowTrace }
-      ]
-    });
-
-  } catch (e: any) {
-    res.status(500).json({ error: e?.message || 'generate failed' });
-  }
-});
+  });
   return r; 
 }           

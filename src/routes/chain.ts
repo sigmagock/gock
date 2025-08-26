@@ -316,3 +316,5 @@ r.post('/chain/atropamath/generate', async (req, res) => {
     res.status(500).json({ error: e?.message || 'generate failed' });
   }
 });
+  return r; 
+}           

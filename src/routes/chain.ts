@@ -154,7 +154,7 @@ export function buildChainRouter(): Router {
       const { to, data, blockTag } = req.body as { to: string; data: string; blockTag?: string };
       if (!/^0x[a-fA-F0-9]{40}$/.test(to)) return res.status(400).json({ error: 'Invalid `to` address' });
       if (!isHexString(data)) return res.status(400).json({ error: 'Invalid calldata' });
-      const ret = await provider.call({ to, data, blockTag: parseBlockTag(blockTag) });
+const ret = await provider.call({ to, data }, parseBlockTag(blockTag));
       res.json({ data: ret });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || 'failed' });
@@ -225,9 +225,12 @@ export function buildChainRouter(): Router {
       const { address } = req.body as { address: string };
       if (!/^0x[a-fA-F0-9]{40}$/.test(address)) return res.status(400).json({ error: 'Invalid contract address' });
 
-      const c = new Contract(address, ['function Generate() returns (uint64)'], provider);
-      const result = await c.Generate();
-      res.json({ result: result.toString() });
+const c = new Contract(address, ['function Generate() returns (uint64)'], provider);
+
+// v6-typed handle
+const method = c.getFunction('Generate');
+const result = await method.staticCall();   // read-only
+res.json({ result: result.toString() });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || 'preview failed' });
     }
@@ -239,14 +242,22 @@ export function buildChainRouter(): Router {
       const { address } = req.body as { address: string };
       if (!/^0x[a-fA-F0-9]{40}$/.test(address)) return res.status(400).json({ error: 'Invalid contract address' });
 
-      const wallet = getWallet();
-      const c = new Contract(address, ['function Generate() returns (uint64)'], wallet);
+const wallet = getWallet();
+const c = new Contract(address, ['function Generate() returns (uint64)'], wallet);
 
-      const gasEstimate = await c.estimateGas.Generate();
-      const gasLimit = (gasEstimate * 120n) / 100n;
+// v6-typed handle
+const method = c.getFunction('Generate');
 
-      const tx = await c.Generate({ gasLimit });
-      res.json({ txHash: tx.hash, gasEstimate: gasEstimate.toString(), gasLimit: gasLimit.toString() });
+const gasEstimate = await method.estimateGas();
+const gasLimit = (gasEstimate * 120n) / 100n;
+
+const tx = await method.send({ gasLimit });   // state-changing
+res.json({
+  txHash: tx.hash,
+  gasEstimate: gasEstimate.toString(),
+  gasLimit: gasLimit.toString()
+});
+
     } catch (e: any) {
       res.status(500).json({ error: e?.message || 'generate failed' });
     }

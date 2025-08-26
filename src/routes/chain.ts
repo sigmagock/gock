@@ -265,17 +265,22 @@ r.post('/chain/atropamath/generate', async (req, res) => {
 
     // wait for mining
     const receipt = await tx.wait();
+    if (!receipt) {
+      return res.status(500).json({ error: "Transaction receipt is null (not mined yet)" });
+    }
 
     // parse logs for DysnomiaNuclearEvent
     let generated: string | null = null;
-    for (const log of receipt.logs) {
+    for (const log of receipt.logs || []) {
       try {
         const parsed = c.interface.parseLog(log);
-        if (parsed.name === "DysnomiaNuclearEvent") {
-          generated = parsed.args.Value.toString();
+        if (parsed && parsed.name === "DysnomiaNuclearEvent") {
+          generated = parsed.args?.Value?.toString?.() ?? null;
           break;
         }
-      } catch { /* ignore other logs */ }
+      } catch {
+        // ignore unrelated logs
+      }
     }
 
     res.json({
@@ -284,9 +289,3 @@ r.post('/chain/atropamath/generate', async (req, res) => {
       gasLimit: gasLimit.toString(),
       result: generated
     });
-  } catch (e: any) {
-    res.status(500).json({ error: e?.message || "generate failed" });
-  }
-});
-  return r;
-}

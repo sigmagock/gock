@@ -223,72 +223,101 @@ const ret = await provider.call({
     }
   });
 
-  // ─────────────────────────── AtropaMath preview (eth_call)
-  r.post('/chain/atropamath/preview', async (req, res) => {
-    try {
-      const { address } = req.body as { address: string };
-      if (!/^0x[a-fA-F0-9]{40}$/.test(address)) return res.status(400).json({ error: 'Invalid contract address' });
+// ─────────────────────────── AtropaMath preview (eth_call)
+r.get('/chain/atropamath/preview', async (_req, res) => {
+  try {
+    const { address } = _req.query as { address?: string };
+    const target = address || "0x24F0154C1dCe548AdF15da2098Fdd8B8A3B8151D";
 
-const c = new Contract(address, ['function Generate() returns (uint64)'], provider);
+    if (!/^0x[a-fA-F0-9]{40}$/.test(target))
+      return res.status(400).json({ error: 'Invalid contract address' });
 
-// v6-typed handle
-const method = c.getFunction('Generate');
-const result = await method.staticCall();   // read-only
-res.json({ result: result.toString() });
-    } catch (e: any) {
-      res.status(500).json({ error: e?.message || 'preview failed' });
-    }
-  });
+    const c = new Contract(target, ['function Generate() returns (uint64)'], provider);
+    const fn = c.getFunction('Generate');
 
-// ─────────────────────────── AtropaMath generate (signed + gas-estimated + shadows)
-  // ─────────────────────────── AtropaMath generate (signed + gas-estimated)
-  r.post('/chain/atropamath/generate', async (req, res) => {
-    try {
-      const { address } = req.body as { address: string };
-      if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
-        return res.status(400).json({ error: 'Invalid contract address' });
-      }
+    const valueBN = await fn.staticCall();
+    res.json({ result: valueBN.toString() });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'preview failed' });
+  }
+});
 
+// ─────────────────────────── AtropaMath generate (signed + gas-estimated)
+r.post('/chain/atropamath/generate', async (req, res) => {
+  try {
+    const { address } = req.body as { address: string };
+    if (!/^0x[a-fA-F0-9]{40}$/.test(address))
+      return res.status(400).json({ error: 'Invalid contract address' });
+
+    const wallet = getWallet();
+    const c = new Contract(address, ['function Generate() returns (uint64)'], wallet);
+    const fn = c.getFunction('Generate');
+
+    const gasEstimate = await fn.estimateGas();
+    const gasLimit = (gasEstimate * 120n) / 100n;
+
+    const tx = await fn.send({ gasLimit });
+    await tx.wait(); // ⬅️ wait for mining
+
+    // always preview again afterwards
+    const readonly = new Contract(address, ['function Generate() returns (uint64)'], provider);
+    const roFn = readonly.getFunction('Generate');
+    const valueBN = await roFn.staticCall();
+
+    res.json({
+      txHash: tx.hash,
+      gasEstimate: gasEstimate.toString(),
+      gasLimit: gasLimit.toString(),
+      result: valueBN.toString()
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'generate failed' });
+  }
+});
+
+// ─────────────────────────── AtropaMath loop (auto-decide)
+let lastSeen: string | null = null;
+r.get('/chain/atropamath/loop', async (_req, res) => {
+  try {
+    const address = "0x24F0154C1dCe548AdF15da2098Fdd8B8A3B8151D";
+    const c = new Contract(address, ['function Generate() returns (uint64)'], provider);
+    const fn = c.getFunction('Generate');
+
+    const candidateBN = await fn.staticCall();
+    const candidate = candidateBN.toString();
+
+    let didGenerate = false;
+    let txHash: string | undefined;
+    let finalValue = candidate;
+
+    if (lastSeen !== null && candidate === lastSeen) {
       const wallet = getWallet();
-      const c = new Contract(address, [
-        "event DysnomiaNuclearEvent(string What, uint64 Value)",
-        "function Generate() returns (uint64)"
-      ], wallet);
+      const w = new Contract(address, ['function Generate() returns (uint64)'], wallet);
+      const wfn = w.getFunction('Generate');
 
-      const fn = c.getFunction("Generate");
-
-      // Estimate gas
-      const gasEstimate = await fn.estimateGas();
+      const gasEstimate = await wfn.estimateGas();
       const gasLimit = (gasEstimate * 120n) / 100n;
 
-      // Send tx
-      const tx = await fn.send({ gasLimit });
-      const receipt = await tx.wait();
+      const tx = await wfn.send({ gasLimit });
+      didGenerate = true;
+      txHash = tx.hash;
+      await tx.wait();
 
-      // Default result
-      let generated: string | null = null;
-
-      if (receipt && receipt.logs) {
-        for (const log of receipt.logs) {
-          try {
-            const parsed = c.interface.parseLog(log);
-            if (parsed && parsed.name === "DysnomiaNuclearEvent") {
-              generated = parsed.args?.Value?.toString() || null;
-              break;
-            }
-          } catch { /* ignore unrelated logs */ }
-        }
-      }
-
-      res.json({
-        txHash: tx.hash,
-        gasEstimate: gasEstimate.toString(),
-        gasLimit: gasLimit.toString(),
-        result: generated
-      });
-    } catch (e: any) {
-      res.status(500).json({ error: e?.message || "generate failed" });
+      const refreshed = await fn.staticCall();
+      finalValue = refreshed.toString();
     }
-  });
+
+    lastSeen = finalValue;
+
+    res.json({
+      candidate,
+      didGenerate,
+      txHash,
+      finalValue
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'loop failed' });
+  }
+});
   return r; 
 }           
